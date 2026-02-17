@@ -7,9 +7,9 @@ interface RealityMapperProps {
   gridSize: number;
   enableZoom: boolean;
   sensitivity: number;   // 0-100: How hard the signal hits
-  refraction: number;    // 0-100: How long the signal lingers (Decay rate)
+  refraction: number;    // 0-100: Signal amplification / Noise floor
   range: number;         // 0-100: Simulation speed/Pulse frequency
-  decayScale: number;    // 0-100: Length of the matrix trail
+  decayScale: number;    // 0-100: Length of the matrix trail & Decay rate
   onExternalStateChange?: (isActive: boolean) => void;
 }
 
@@ -352,11 +352,20 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
            // Calculate settings derived values
            const sensMult = (sensitivity / 50); // 0.0 - 2.0
            
-           // Refraction (Decay): 
-           // Map 0-100 to 0.94 - 0.998 for extremely high persistence options
-           // This allows "ghosts" to linger for seconds
-           const decayFactor = 0.94 + (refraction / 100) * 0.058; 
+           // Map decayScale (0-100) to length (10 - 200 chars)
+           const streamLen = Math.max(10, Math.floor(decayScale * 2));
            
+           // DECAY CALCULATION:
+           // Link the grid energy decay directly to the stream length (decayScale).
+           // We want the energy to fade to 0.05 (visible threshold) over the course of 'streamLen' frames
+           // to match the visual trail of the matrix rain.
+           // Formula: 0.05 = factor ^ streamLen  =>  factor = 0.05 ^ (1/streamLen)
+           const decayFactor = Math.pow(0.05, 1 / streamLen);
+           
+           // Refraction now acts as a noise floor / amplifier modifier
+           // Higher refraction = slightly more noise/signal boost
+           const noiseChance = 0.0002 + (refraction / 100) * 0.0008;
+
            // Process Grid
            for (let i = 0; i < numCells; i++) {
                const r = pixels[i * 4];
@@ -372,7 +381,7 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
 
                // Inject random noise for "Idle" activity that decays naturally
                // This creates a slow-fading static effect rather than flickering
-               if (Math.random() < 0.0005) {
+               if (Math.random() < noiseChance) {
                    inputEnergy = Math.max(inputEnergy, Math.random() * 0.5 + 0.2); 
                }
 
@@ -427,8 +436,6 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
                
                let isHead = false;
                let streamOpacity = 0;
-               // Map decayScale (0-100) to length (10 - 200 chars)
-               const streamLen = Math.max(10, Math.floor(decayScale * 2));
 
                if (dist >= 0 && dist < 1) {
                    isHead = true;
