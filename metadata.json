@@ -1,0 +1,7 @@
+{
+  "name": "Spatial Mapper",
+  "description": "A cyberpunk terminal simulation that visualizes spatial data using 3D wireframes and Matrix-style code streams, powered by Gemini for structural analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
