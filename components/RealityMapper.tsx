@@ -9,6 +9,7 @@ interface RealityMapperProps {
   sensitivity: number;   // 0-100: How hard the signal hits
   refraction: number;    // 0-100: How long the signal lingers (Decay rate)
   range: number;         // 0-100: Simulation speed/Pulse frequency
+  decayScale: number;    // 0-100: Length of the matrix trail
   onExternalStateChange?: (isActive: boolean) => void;
 }
 
@@ -26,12 +27,13 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
   sensitivity,
   refraction,
   range,
+  decayScale,
   onExternalStateChange 
 }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const animationRef = useRef<number>();
+  const animationRef = useRef<number | null>(null);
   
   // Physics State
   // We use a persistent buffer for "Grid Energy" to simulate light refraction/decay
@@ -53,6 +55,57 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
   const CHARS_MED = "10";
   const CHARS_LOW = "0";
 
+  // --- External Window & Lifecycle ---
+  const toggleExternalWindow = () => {
+    if (externalActive) {
+      externalWindowRef.current?.close();
+      setExternalActive(false);
+      onExternalStateChange?.(false);
+      externalWindowRef.current = null;
+    } else {
+      if (!canvasRef.current) return;
+      const width = 800;
+      const height = 600;
+      const left = (window.screen.width - width) / 2;
+      const top = (window.screen.height - height) / 2;
+      const newWindow = window.open('', 'MatrixFeed', `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`);
+
+      if (newWindow) {
+        externalWindowRef.current = newWindow;
+        newWindow.document.title = "MATRIX // SIGNAL_OUTPUT";
+        newWindow.document.body.style.margin = '0';
+        newWindow.document.body.style.backgroundColor = '#000';
+        newWindow.document.body.style.overflow = 'hidden';
+        newWindow.document.body.style.display = 'flex';
+        newWindow.document.body.style.justifyContent = 'center';
+        newWindow.document.body.style.alignItems = 'center';
+        const video = newWindow.document.createElement('video');
+        video.autoplay = true;
+        video.muted = true;
+        video.style.width = '100vw';
+        video.style.height = '100vh';
+        video.style.objectFit = 'contain';
+        newWindow.document.body.appendChild(video);
+
+        // @ts-ignore
+        if (canvasRef.current.captureStream) {
+            // @ts-ignore
+            const stream = canvasRef.current.captureStream(30);
+            video.srcObject = stream;
+        }
+
+        newWindow.addEventListener('beforeunload', () => {
+          setExternalActive(false);
+          onExternalStateChange?.(false);
+          externalWindowRef.current = null;
+        });
+
+        setExternalActive(true);
+        onExternalStateChange?.(true);
+      }
+    }
+  };
+
   useImperativeHandle(ref, () => ({
     getSnapshot: () => {
       if (!videoRef.current) return null;
@@ -65,7 +118,7 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
       return snapshotCanvas.toDataURL('image/jpeg', 0.8);
     },
     toggleExternalWindow: () => toggleExternalWindow()
-  }));
+  }), [externalActive]);
 
   // Reset zoom when disabled
   useEffect(() => {
@@ -189,57 +242,6 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
             transformRef.current = { x: newX, y: newY, scale: newScale };
         }
         lastTouchDistRef.current = dist;
-    }
-  };
-
-  // --- External Window & Lifecycle ---
-  const toggleExternalWindow = () => {
-    if (externalActive) {
-      externalWindowRef.current?.close();
-      setExternalActive(false);
-      onExternalStateChange?.(false);
-      externalWindowRef.current = null;
-    } else {
-      if (!canvasRef.current) return;
-      const width = 800;
-      const height = 600;
-      const left = (window.screen.width - width) / 2;
-      const top = (window.screen.height - height) / 2;
-      const newWindow = window.open('', 'MatrixFeed', `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`);
-
-      if (newWindow) {
-        externalWindowRef.current = newWindow;
-        newWindow.document.title = "MATRIX // SIGNAL_OUTPUT";
-        newWindow.document.body.style.margin = '0';
-        newWindow.document.body.style.backgroundColor = '#000';
-        newWindow.document.body.style.overflow = 'hidden';
-        newWindow.document.body.style.display = 'flex';
-        newWindow.document.body.style.justifyContent = 'center';
-        newWindow.document.body.style.alignItems = 'center';
-        const video = newWindow.document.createElement('video');
-        video.autoplay = true;
-        video.muted = true;
-        video.style.width = '100vw';
-        video.style.height = '100vh';
-        video.style.objectFit = 'contain';
-        newWindow.document.body.appendChild(video);
-
-        // @ts-ignore
-        if (canvasRef.current.captureStream) {
-            // @ts-ignore
-            const stream = canvasRef.current.captureStream(30);
-            video.srcObject = stream;
-        }
-
-        newWindow.addEventListener('beforeunload', () => {
-          setExternalActive(false);
-          onExternalStateChange?.(false);
-          externalWindowRef.current = null;
-        });
-
-        setExternalActive(true);
-        onExternalStateChange?.(true);
-      }
     }
   };
 
@@ -425,7 +427,8 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
                
                let isHead = false;
                let streamOpacity = 0;
-               const streamLen = 45; // Significantly longer tail
+               // Map decayScale (0-100) to length (10 - 200 chars)
+               const streamLen = Math.max(10, Math.floor(decayScale * 2));
 
                if (dist >= 0 && dist < 1) {
                    isHead = true;
@@ -498,7 +501,7 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
     return () => {
       if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
-  }, [isScanning, showColor, gridSize, sensitivity, refraction, range]); 
+  }, [isScanning, showColor, gridSize, sensitivity, refraction, range, decayScale]); 
 
   return (
     <div 
