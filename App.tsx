@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import MatrixRain from './components/MatrixRain';
 import RealityMapper, { RealityMapperHandle } from './components/RealityMapper';
 import TerminalOutput from './components/TerminalOutput';
+import { analyzeSector } from './services/geminiService';
 import { LogEntry, MapMode } from './types';
-import { Cpu, Settings, Grid, Layers, X, MonitorUp, MousePointer2, Activity, Waves, Zap, ChevronsDown } from 'lucide-react';
+import { Cpu, Settings, Grid, Layers, X, MonitorUp, MousePointer2, Activity, Waves, Zap, ChevronsDown, Scan } from 'lucide-react';
 
 const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -50,6 +51,7 @@ const App: React.FC = () => {
   useEffect(() => {
     addLog("Matrix Spatial Mapper OS v5.3 initialized...", "system");
     addLog("Calibrating optical refraction sensors...", "system");
+    addLog("Neural link: STANDBY (Offline capable)", "system");
   }, []);
 
   const toggleNaturalColor = () => {
@@ -60,6 +62,33 @@ const App: React.FC = () => {
   const toggleZoom = () => {
     setZoomEnabled(!zoomEnabled);
     addLog(`Interactive Zoom: ${!zoomEnabled ? 'ENABLED' : 'DISABLED'}`, "system");
+  };
+
+  const handleScan = async () => {
+    if (mode === MapMode.SCANNING || mode === MapMode.ANALYZING) return;
+
+    setMode(MapMode.SCANNING);
+    addLog("Initiating full spectrum scan...", "input");
+
+    // Artificial delay for visual "Scanning" effect
+    setTimeout(async () => {
+        setMode(MapMode.ANALYZING);
+        addLog("Processing visual data stream...", "system");
+
+        try {
+            const snapshot = realityMapperRef.current?.getSnapshot();
+            if (snapshot) {
+                const analysisResult = await analyzeSector(snapshot);
+                addLog(analysisResult, "analysis");
+            } else {
+                addLog("ERR: Video feed unavailable for analysis.", "error");
+            }
+        } catch (e) {
+            addLog("ERR: Analysis subsystem critical failure.", "error");
+        } finally {
+            setMode(MapMode.IDLE);
+        }
+    }, 2000);
   };
 
   const handleDensityChange = (e: React.ChangeEvent<HTMLInputElement>) => setDensity(parseInt(e.target.value, 10));
@@ -85,6 +114,25 @@ const App: React.FC = () => {
             </div>
             
             <div className="flex items-center gap-2">
+                {/* SCAN Button */}
+                <button 
+                    onClick={handleScan}
+                    disabled={mode !== MapMode.IDLE}
+                    className={`
+                        flex items-center gap-2 px-3 py-1 border rounded transition-all active:scale-95
+                        ${mode === MapMode.SCANNING 
+                            ? 'border-yellow-500 bg-yellow-900/20 text-yellow-500 animate-pulse' 
+                            : 'border-green-500 bg-green-900/20 text-green-400 hover:bg-green-900/40 hover:text-white'}
+                        disabled:opacity-50 disabled:cursor-not-allowed
+                    `}
+                    title="Initiate Sector Scan"
+                >
+                    <Scan className={`w-4 h-4 ${mode === MapMode.SCANNING ? 'animate-spin' : ''}`} />
+                    <span className="hidden md:inline font-bold tracking-wider">
+                        {mode === MapMode.SCANNING ? 'SCANNING...' : 'SCAN'}
+                    </span>
+                </button>
+
                 {/* External Feed Button */}
                 <button 
                     onClick={() => realityMapperRef.current?.toggleExternalWindow()}
@@ -308,7 +356,7 @@ const App: React.FC = () => {
         {/* Desktop Footer */}
         <footer className="hidden lg:flex text-[10px] text-green-900 justify-between uppercase tracking-wider shrink-0">
           <div>System Uptime: {Math.floor(performance.now() / 1000)}s</div>
-          <div>Gemini Vision: Standby</div>
+          <div>Gemini Vision: {process.env.API_KEY ? 'ONLINE' : 'STANDBY (OFFLINE MODE)'}</div>
         </footer>
 
       </div>

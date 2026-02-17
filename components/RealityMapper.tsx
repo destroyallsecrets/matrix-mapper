@@ -51,9 +51,9 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
   const externalWindowRef = useRef<Window | null>(null);
   
   // Character Sets
-  const CHARS_HIGH = "1";
-  const CHARS_MED = "10";
-  const CHARS_LOW = "0";
+  const CHARS_HIGH = "10"; // High energy / Solid
+  const CHARS_MED = "01"; // Medium energy / Semi-solid
+  const CHARS_LOW = "-:";  // Low energy / Fading trail
 
   // --- External Window & Lifecycle ---
   const toggleExternalWindow = () => {
@@ -352,18 +352,15 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
            // Calculate settings derived values
            const sensMult = (sensitivity / 50); // 0.0 - 2.0
            
-           // Map decayScale (0-100) to length (10 - 200 chars)
-           const streamLen = Math.max(10, Math.floor(decayScale * 2));
+           // Map decayScale (0-100) to length (Expanded range for more impact)
+           // 5 frames to ~300 frames (0.1s to 5s)
+           const streamLen = Math.max(5, Math.floor(decayScale * 3));
            
-           // DECAY CALCULATION:
-           // Link the grid energy decay directly to the stream length (decayScale).
-           // We want the energy to fade to 0.05 (visible threshold) over the course of 'streamLen' frames
-           // to match the visual trail of the matrix rain.
-           // Formula: 0.05 = factor ^ streamLen  =>  factor = 0.05 ^ (1/streamLen)
-           const decayFactor = Math.pow(0.05, 1 / streamLen);
+           // Base decay calculation
+           // We want energy to fade to ~0.01 (black) over streamLen frames
+           const baseDecay = Math.pow(0.01, 1 / streamLen);
            
-           // Refraction now acts as a noise floor / amplifier modifier
-           // Higher refraction = slightly more noise/signal boost
+           // Refraction adds random noise floor
            const noiseChance = 0.0002 + (refraction / 100) * 0.0008;
 
            // Process Grid
@@ -372,43 +369,47 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
                const g = pixels[i * 4 + 1];
                const b = pixels[i * 4 + 2];
                
-               // Calculate input brightness (The "Pulse")
+               // Calculate input brightness (The "Solidness")
                const brightness = (r + g + b) / 3 / 255.0; 
                
-               // Add new energy based on sensitivity with a small noise gate
+               // Add new energy based on sensitivity
                const noiseGate = 0.05;
-               let inputEnergy = Math.max(0, brightness - noiseGate) * sensMult;
+               let inputSignal = Math.max(0, brightness - noiseGate) * sensMult;
 
-               // Inject random noise for "Idle" activity that decays naturally
-               // This creates a slow-fading static effect rather than flickering
+               // Inject random noise for "Idle" activity
                if (Math.random() < noiseChance) {
-                   inputEnergy = Math.max(inputEnergy, Math.random() * 0.5 + 0.2); 
+                   inputSignal = Math.max(inputSignal, Math.random() * 0.5 + 0.2); 
                }
+               
+               // DYNAMIC DECAY ("Phosphor Burn" effect)
+               // Solid surfaces (high energy) burn in and decay SLOWER than weak signals.
+               // We modulate the decay factor by the current stored energy.
+               // High stored energy -> Slower decay (closer to 1.0)
+               // Low stored energy -> Faster decay (baseDecay)
+               const persistenceBonus = (energyGrid[i] * 0.02) * (decayScale / 50); 
+               const effectiveDecay = Math.min(0.995, baseDecay + persistenceBonus);
 
-               // Apply Decay (The "Refraction/Idle")
-               // current = current * decay
-               // We take the max of decay or new input to allow bright signals to override decay
-               energyGrid[i] = Math.max(energyGrid[i] * decayFactor, inputEnergy);
+               // Update Energy
+               // We take the max of (Decayed Past) vs (New Signal)
+               energyGrid[i] = Math.max(energyGrid[i] * effectiveDecay, inputSignal);
                
                // Cap at 1.0
                if (energyGrid[i] > 1.0) energyGrid[i] = 1.0;
            }
 
-           // --- 4. Matrix Drop Logic (Modified by Range) ---
+           // --- 4. Matrix Drop Logic ---
            const speedMult = 0.5 + (range / 50); // Speed modifier
            
            for (let i = 0; i < dropsRef.current.length; i++) {
                // Drops fall faster if the column has high total energy
-               // Sample middle pixel of column for rough estimate
                const midIdx = Math.floor(rows/2) * columns + i;
                const colEnergy = energyGrid[midIdx];
                
-               // Slower base speed for subtler flow
                const dropSpeed = (0.2 + colEnergy * 1.5) * speedMult;
                dropsRef.current[i] += dropSpeed;
                
                if (dropsRef.current[i] > rows + 40) {
-                   dropsRef.current[i] = -Math.random() * 40; // Reset higher up
+                   dropsRef.current[i] = -Math.random() * 40; 
                }
            }
 
@@ -437,58 +438,55 @@ const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({
                let isHead = false;
                let streamOpacity = 0;
 
+               // Calculate tail based on decayScale so rain matches background decay
                if (dist >= 0 && dist < 1) {
                    isHead = true;
                } else if (dist > 0 && dist < streamLen) {
-                   // Linear falloff for slow decay
-                   // Start at 0.95 opacity to ensure "1s" (High Energy chars) appear in the tail
                    streamOpacity = (1 - (dist / streamLen)) * 0.95; 
                }
 
                // --- Optimization: Skip empty space ---
-               // Only skip if both energy (reality) and stream (rain) are dark
-               if (energy < 0.05 && streamOpacity < 0.05) {
+               if (energy < 0.02 && streamOpacity < 0.02) {
                    continue;
                }
 
                // --- Character Selection ---
-               // High energy or Stream Head gets active characters
                let char = '';
+               // Combined visibility (Rain + Background Reality)
                const effectiveEnergy = Math.max(energy, streamOpacity);
                
-               if (effectiveEnergy > 0.8) {
+               if (effectiveEnergy > 0.85) {
                    const charIdx = (cx + cy + frameCount) % CHARS_HIGH.length;
                    char = CHARS_HIGH[charIdx];
                } else if (effectiveEnergy > 0.4) {
                    const charIdx = (cx * cy) % CHARS_MED.length;
                    char = CHARS_MED[charIdx];
                } else {
-                   char = CHARS_LOW[cx % CHARS_LOW.length];
+                   const charIdx = (cx + cy) % CHARS_LOW.length;
+                   char = CHARS_LOW[charIdx];
                }
 
                // --- Color / Style ---
                let fillStyle = '';
 
                if (isHead) {
-                   fillStyle = '#ffffff'; // The leader is always white
+                   fillStyle = '#ffffff'; 
                } else if (showColor) {
-                  // RGB Mode: Blend reality map with stream opacity
                   const r = pixels[idx * 4];
                   const g = pixels[idx * 4 + 1];
                   const b = pixels[idx * 4 + 2];
-                  // Boost brightness by stream opacity
                   const boost = streamOpacity * 255;
                   fillStyle = `rgba(${Math.min(255, r+boost)},${Math.min(255, g+boost)},${Math.min(255, b+boost)},${effectiveEnergy})`;
                } else {
-                  // Matrix Mode
                   if (effectiveEnergy > 0.9) {
-                      fillStyle = '#ccffcc';
+                      fillStyle = '#ccffcc'; // Brightest
                   } else if (effectiveEnergy > 0.6) {
                       fillStyle = `rgba(100, 255, 100, ${effectiveEnergy})`;
                   } else {
-                      // Fading trail / Decay map
-                      const val = Math.floor(effectiveEnergy * 180);
-                      fillStyle = `rgb(0, ${val}, 0)`;
+                      // Fading trail - darker green
+                      // Map lower energy to a dimmer, more transparent green
+                      const dimness = Math.floor(effectiveEnergy * 200);
+                      fillStyle = `rgba(0, ${dimness + 50}, 0, ${effectiveEnergy})`;
                   }
                }
                
