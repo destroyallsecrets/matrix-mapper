@@ -1,11 +1,14 @@
+
 import React, { useEffect, useRef } from 'react';
 import { LogEntry } from '../types';
+import { X } from 'lucide-react';
 
 interface TerminalOutputProps {
   logs: LogEntry[];
+  onClose?: () => void;
 }
 
-const TerminalOutput: React.FC<TerminalOutputProps> = ({ logs }) => {
+const TerminalOutput: React.FC<TerminalOutputProps> = ({ logs, onClose }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -16,9 +19,20 @@ const TerminalOutput: React.FC<TerminalOutputProps> = ({ logs }) => {
 
   return (
     <div className="flex flex-col h-full border border-green-900 bg-black/90 rounded-lg shadow-[0_0_15px_rgba(0,255,0,0.1)] font-mono text-sm overflow-hidden">
-      <div className="bg-green-900/20 p-2 border-b border-green-900 flex justify-between items-center">
-        <span className="text-green-500 font-bold">SYSTEM_LOGS</span>
-        <span className="text-xs text-green-700 animate-pulse">● LIVE</span>
+      <div className="bg-green-900/20 p-2 border-b border-green-900 flex justify-between items-center select-none">
+        <div className="flex items-center gap-2">
+            <span className="text-green-500 font-bold">SYSTEM_LOGS</span>
+            <span className="text-xs text-green-700 animate-pulse">● LIVE</span>
+        </div>
+        {onClose && (
+            <button 
+                onClick={onClose}
+                className="text-green-800 hover:text-green-500 transition-colors p-1"
+                aria-label="Hide logs"
+            >
+                <X className="w-3.5 h-3.5" />
+            </button>
+        )}
       </div>
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-2">
         {logs.map((log) => (

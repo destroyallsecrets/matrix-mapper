@@ -1,37 +1,42 @@
+
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
 import MatrixRain from './components/MatrixRain';
 import RealityMapper, { RealityMapperHandle } from './components/RealityMapper';
 import TerminalOutput from './components/TerminalOutput';
 import { analyzeSector } from './services/geminiService';
 import { LogEntry, MapMode } from './types';
-import { Cpu, Settings, Grid, Layers, X, MonitorUp, MousePointer2, Activity, Waves, Zap, ChevronsDown, Scan } from 'lucide-react';
+import { Cpu, Settings, X, Scan, Cast, Minimize2, Terminal, Layers, Camera, Activity, ExternalLink, Video, Aperture } from 'lucide-react';
 
 const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [mode, setMode] = useState<MapMode>(MapMode.IDLE);
   const realityMapperRef = useRef<RealityMapperHandle>(null);
   
-  // Menu & Feature States
+  // UI States
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isBroadcastMode, setIsBroadcastMode] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+
+  // Calibration defaults for realistic binary sight
   const [naturalColorMode, setNaturalColorMode] = useState(false);
-  const [isExternalActive, setIsExternalActive] = useState(false);
-  const [zoomEnabled, setZoomEnabled] = useState(true);
+  const [showTerminal, setShowTerminal] = useState(window.innerWidth > 1024);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamera, setSelectedCamera] = useState<string>('');
+  const [streamTrailDecay, setStreamTrailDecay] = useState(0);
   
-  // Visual Simulation Parameters
-  const [density, setDensity] = useState<number>(75);
-  const [sensitivity, setSensitivity] = useState<number>(60); // Signal Sensitivity
-  const [refraction, setRefraction] = useState<number>(85);   // Light Decay / Refraction
-  const [range, setRange] = useState<number>(50);             // Pulse Frequency / Speed
-  const [decayScale, setDecayScale] = useState<number>(30);   // Trail Length / Decay Scale
+  // Window size state for responsiveness
+  const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
-  // Constants for Grid Calculation
-  const MAX_GRID_PX = 48; // Largest pixel size (Low Density)
-  const MIN_GRID_PX = 6;  // Smallest pixel size (High Density)
-
-  // Calculate actual grid size based on density percentage
-  // Inverted: Higher density = Lower grid size
-  const currentGridSize = Math.round(MAX_GRID_PX - (density / 100) * (MAX_GRID_PX - MIN_GRID_PX));
+  // Tactical simulation constants
+  const sensitivity = 85; 
+  const density = 85; 
+  const decayScale = 12; // Zero-Ghosting tuning for the void
   
+  const isMobile = windowWidth < 768;
+  const baseGrid = isMobile ? 7 : 9;
+  const currentGridSize = Math.max(isMobile ? 5 : 4, Math.round(32 - (density / 100) * (32 - baseGrid)));
+
   const addLog = (message: string, type: LogEntry['type'] = 'system') => {
     const newLog: LogEntry = {
       id: Math.random().toString(36).substr(2, 9),
@@ -39,325 +44,360 @@ const App: React.FC = () => {
       message,
       type
     };
-    setLogs(prev => {
-        const updated = [...prev, newLog];
-        // Keep logs from growing indefinitely
-        if (updated.length > 100) return updated.slice(updated.length - 100);
-        return updated;
+    setLogs(prev => [...prev.slice(-49), newLog]);
+  };
+
+  const refreshDevices = async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter(device => device.kind === 'videoinput');
+      setVideoDevices(videoInputs);
+      
+      if (videoInputs.length > 0 && !selectedCamera) {
+        const back = videoInputs.find(d => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('rear'));
+        setSelectedCamera(back?.deviceId || videoInputs[0].deviceId);
+      }
+    } catch (err) {
+      console.error("Device probe failure:", err);
+    }
+  };
+
+  const toggleBroadcastMode = () => {
+    setIsBroadcastMode(prev => {
+      const next = !prev;
+      addLog(next ? "SIGHT_UPLINK: ENCRYPTED" : "INTERFACE_REVERT: LOCAL", "system");
+      return next;
     });
   };
 
-  // Initial Boot
+  const handlePopout = () => {
+      if (realityMapperRef.current) {
+          realityMapperRef.current.togglePiP();
+          addLog("VISION_LAYER: DETACHED", "system");
+      }
+  };
+
   useEffect(() => {
-    addLog("Matrix Spatial Mapper OS v5.3 initialized...", "system");
-    addLog("Calibrating optical refraction sensors...", "system");
-    addLog("Neural link: STANDBY (Offline capable)", "system");
+    addLog("SIGHT_OS V9.6 STABLE LOADED", "system");
+    addLog("Binary Mapping: REALISTIC_LOGIC", "system");
+    addLog("Video Sync: CALIBRATED", "system");
+    refreshDevices();
+    
+    const handleDeviceChange = () => refreshDevices();
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+        window.removeEventListener('resize', handleResize);
+    };
   }, []);
 
-  const toggleNaturalColor = () => {
-    setNaturalColorMode(!naturalColorMode);
-    addLog(`Visual filter updated: ${!naturalColorMode ? 'NATURAL_COLOR' : 'MONOCHROME_GREEN'}`, "system");
-  };
-
-  const toggleZoom = () => {
-    setZoomEnabled(!zoomEnabled);
-    addLog(`Interactive Zoom: ${!zoomEnabled ? 'ENABLED' : 'DISABLED'}`, "system");
-  };
-
   const handleScan = async () => {
-    if (mode === MapMode.SCANNING || mode === MapMode.ANALYZING) return;
-
+    if (mode !== MapMode.IDLE) return;
     setMode(MapMode.SCANNING);
-    addLog("Initiating full spectrum scan...", "input");
-
-    // Artificial delay for visual "Scanning" effect
+    addLog("Extracting spatial primitives...", "input");
     setTimeout(async () => {
         setMode(MapMode.ANALYZING);
-        addLog("Processing visual data stream...", "system");
-
-        try {
-            const snapshot = realityMapperRef.current?.getSnapshot();
-            if (snapshot) {
-                const analysisResult = await analyzeSector(snapshot);
-                addLog(analysisResult, "analysis");
-            } else {
-                addLog("ERR: Video feed unavailable for analysis.", "error");
-            }
-        } catch (e) {
-            addLog("ERR: Analysis subsystem critical failure.", "error");
-        } finally {
-            setMode(MapMode.IDLE);
+        const snapshot = realityMapperRef.current?.getSnapshot();
+        if (snapshot) {
+            const result = await analyzeSector(snapshot);
+            addLog(result, "analysis");
         }
+        setMode(MapMode.IDLE);
     }, 2000);
   };
 
-  const handleDensityChange = (e: React.ChangeEvent<HTMLInputElement>) => setDensity(parseInt(e.target.value, 10));
-  const handleSensitivityChange = (e: React.ChangeEvent<HTMLInputElement>) => setSensitivity(parseInt(e.target.value, 10));
-  const handleRefractionChange = (e: React.ChangeEvent<HTMLInputElement>) => setRefraction(parseInt(e.target.value, 10));
-  const handleRangeChange = (e: React.ChangeEvent<HTMLInputElement>) => setRange(parseInt(e.target.value, 10));
-  const handleDecayScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => setDecayScale(parseInt(e.target.value, 10));
+  const handleTakePhoto = () => {
+    if (realityMapperRef.current) {
+      const dataUrl = realityMapperRef.current.getSnapshot();
+      if (dataUrl) {
+        const link = document.createElement('a');
+        link.href = dataUrl;
+        link.download = `sight_os_capture_${Date.now()}.png`;
+        link.click();
+        addLog("IMAGE_CAPTURE: SAVED", "system");
+      }
+    }
+  };
+
+  const handleToggleRecording = async () => {
+    if (!realityMapperRef.current) return;
+    
+    if (isRecording) {
+      setIsRecording(false);
+      const blob = await realityMapperRef.current.stopRecording();
+      if (blob) {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `sight_os_record_${Date.now()}.webm`;
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 100);
+        addLog("VIDEO_CAPTURE: SAVED", "system");
+      }
+    } else {
+      setIsRecording(true);
+      realityMapperRef.current.startRecording();
+      addLog("VIDEO_CAPTURE: STARTED", "system");
+    }
+  };
 
   return (
     <div className="relative w-full h-[100dvh] overflow-hidden bg-black text-green-500 font-mono flex flex-col">
-      {/* Background Effect */}
-      <MatrixRain opacity={0.1} color="#003300" />
+      <MatrixRain opacity={0.02} color="#000d00" />
 
-      {/* Main UI Container */}
-      <div className="relative z-10 w-full h-full max-w-[1920px] mx-auto p-2 md:p-4 flex flex-col gap-4">
+      <div className={`relative z-10 w-full h-full mx-auto flex flex-col transition-all duration-500 ${isBroadcastMode ? 'p-0' : 'p-2 md:p-4 max-w-[1920px] gap-2 md:gap-4'}`}>
         
-        {/* Header */}
-        <header className="flex justify-between items-center border-b border-green-900 pb-2 bg-black/50 backdrop-blur-sm relative z-50 shrink-0">
+        {!isBroadcastMode && (
+        <header className="flex justify-between items-center border-b border-green-900/20 pb-2 bg-black/30 backdrop-blur-sm relative z-50 shrink-0">
           <div className="flex items-center gap-2 md:gap-4">
             <div className="flex items-center gap-2">
-              <Cpu className="w-5 h-5 md:w-6 md:h-6 animate-pulse text-green-400" />
-              <h1 className="text-lg md:text-xl font-bold tracking-widest glow-text truncate">MATRIX // REALITY</h1>
+              <Cpu className="w-3.5 h-3.5 text-green-600" />
+              <h1 className="text-[11px] md:text-xs font-bold tracking-[0.6em] text-green-800 uppercase">Sight_OS</h1>
             </div>
             
-            <div className="flex items-center gap-2">
-                {/* SCAN Button */}
+            <div className="flex items-center gap-1 md:gap-2 pl-4 border-l border-green-900/30">
                 <button 
                     onClick={handleScan}
                     disabled={mode !== MapMode.IDLE}
-                    className={`
-                        flex items-center gap-2 px-3 py-1 border rounded transition-all active:scale-95
-                        ${mode === MapMode.SCANNING 
-                            ? 'border-yellow-500 bg-yellow-900/20 text-yellow-500 animate-pulse' 
-                            : 'border-green-500 bg-green-900/20 text-green-400 hover:bg-green-900/40 hover:text-white'}
-                        disabled:opacity-50 disabled:cursor-not-allowed
-                    `}
-                    title="Initiate Sector Scan"
+                    className={`px-4 py-1 border rounded-sm transition-all flex items-center gap-2 ${mode === MapMode.SCANNING ? 'border-yellow-600 text-yellow-600 animate-pulse' : 'border-green-900/50 hover:border-green-500 text-green-900 hover:text-green-500'}`}
                 >
-                    <Scan className={`w-4 h-4 ${mode === MapMode.SCANNING ? 'animate-spin' : ''}`} />
-                    <span className="hidden md:inline font-bold tracking-wider">
-                        {mode === MapMode.SCANNING ? 'SCANNING...' : 'SCAN'}
-                    </span>
+                    <Scan className="w-3.5 h-3.5" />
+                    <span className="text-[9px] font-bold uppercase tracking-widest hidden sm:inline">Audit</span>
                 </button>
 
-                {/* External Feed Button */}
                 <button 
-                    onClick={() => realityMapperRef.current?.toggleExternalWindow()}
-                    className={`p-2 md:p-1 border ${isExternalActive ? 'border-green-400 bg-green-900/40 text-green-400' : 'border-green-900 hover:border-green-600'} rounded transition-all active:scale-95`}
-                    title={isExternalActive ? "Close External Feed" : "Pop-out External Feed"}
-                    aria-label="Toggle External Feed"
+                    onClick={handleTakePhoto}
+                    className="p-1.5 border border-green-900/50 hover:border-green-500 rounded-sm transition-all text-green-900 hover:text-green-500"
+                    title="Capture Photo"
                 >
-                    <MonitorUp className={`w-5 h-5 md:w-4 md:h-4 ${isExternalActive ? 'animate-pulse' : ''}`} />
+                    <Aperture className="w-3.5 h-3.5" />
                 </button>
 
-                {/* Feature Menu Toggle */}
+                <button 
+                    onClick={handleToggleRecording}
+                    className={`p-1.5 border rounded-sm transition-all ${isRecording ? 'border-red-600 text-red-600 animate-pulse' : 'border-green-900/50 hover:border-green-500 text-green-900 hover:text-green-500'}`}
+                    title={isRecording ? "Stop Recording" : "Record Video"}
+                >
+                    <Video className="w-3.5 h-3.5" />
+                </button>
+
+                <button 
+                    onClick={handlePopout}
+                    className="p-1.5 border border-green-900/50 hover:border-green-500 rounded-sm transition-all text-green-900 hover:text-green-500"
+                    title="Popout Vision (PiP)"
+                >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+
+                <button onClick={toggleBroadcastMode} className="p-1.5 border border-green-900/50 hover:border-green-500 rounded-sm transition-all" title="Broadcast Mode (Clean UI)">
+                    <Cast className="w-3.5 h-3.5 text-green-900" />
+                </button>
+
                 <button 
                   onClick={() => setIsMenuOpen(!isMenuOpen)}
-                  className={`p-2 md:p-1 border ${isMenuOpen ? 'border-green-400 bg-green-900/40' : 'border-green-900 hover:border-green-600'} rounded transition-all active:scale-95`}
-                  title="System Configuration"
-                  aria-label="Toggle Settings"
+                  className={`p-1.5 border transition-all ${isMenuOpen ? 'border-green-500 bg-green-950/20' : 'border-green-900/50 hover:border-green-500'} rounded-sm`}
                 >
-                  {isMenuOpen ? <X className="w-5 h-5 md:w-4 md:h-4" /> : <Settings className="w-5 h-5 md:w-4 md:h-4" />}
+                  <Settings className="w-3.5 h-3.5 text-green-900" />
                 </button>
             </div>
           </div>
           
-          <div className="text-[10px] md:text-xs text-green-700 flex flex-col items-end leading-tight">
-             <span>SENS: {sensitivity} | REFR: {refraction}</span>
-             <span>SCALE: {decayScale} | PULSE: {range}</span>
+          <div className="text-[8px] text-green-950 text-right uppercase tracking-[0.4em] hidden sm:block">
+             Binary Sight Reality Integration // v9.6
           </div>
         </header>
+        )}
 
-        {/* Content Grid */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-3 gap-4 min-h-0 relative">
-          
-          {/* Main Viewport (Visualizer) */}
-          <div className="lg:col-span-2 flex flex-col gap-4 min-h-0 h-full relative group">
-            <div className="flex-1 relative border border-green-900 bg-black/50 rounded-lg overflow-hidden shadow-[0_0_15px_rgba(0,255,0,0.1)]">
-                {/* Corner Accents */}
-                <div className="absolute top-0 left-0 w-4 h-4 border-t-2 border-l-2 border-green-500 z-20 pointer-events-none opacity-50"></div>
-                <div className="absolute top-0 right-0 w-4 h-4 border-t-2 border-r-2 border-green-500 z-20 pointer-events-none opacity-50"></div>
-                <div className="absolute bottom-0 left-0 w-4 h-4 border-b-2 border-l-2 border-green-500 z-20 pointer-events-none opacity-50"></div>
-                <div className="absolute bottom-0 right-0 w-4 h-4 border-b-2 border-r-2 border-green-500 z-20 pointer-events-none opacity-50"></div>
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-2 md:gap-4 min-h-0 relative">
+          <div className={`${isBroadcastMode ? 'fixed inset-0 z-[100]' : `${showTerminal ? 'lg:col-span-3' : 'lg:col-span-4'} relative group h-full flex flex-col`}`}>
+            <div className={`flex-1 relative overflow-hidden bg-black ${isBroadcastMode ? 'w-full h-full' : 'border border-green-900/30 rounded-sm'}`}>
                 
+                {isBroadcastMode && (
+                    <button onClick={toggleBroadcastMode} className="absolute top-6 right-6 z-[110] p-4 bg-black/40 backdrop-blur-lg border border-green-900/40 rounded-full opacity-30 hover:opacity-100 transition-all">
+                        <Minimize2 className="w-4 h-4" />
+                    </button>
+                )}
+
                 <RealityMapper 
                   ref={realityMapperRef}
                   isScanning={mode === MapMode.SCANNING} 
                   mode={mode}
                   showColor={naturalColorMode}
+                  showFeed={false}
                   gridSize={currentGridSize}
-                  enableZoom={zoomEnabled}
+                  enableZoom={!isBroadcastMode}
                   sensitivity={sensitivity}
-                  refraction={refraction}
-                  range={range}
+                  refraction={0}
+                  diffusion={0}
+                  ambientLight={0}
+                  bloomThreshold={90}
+                  range={50}
                   decayScale={decayScale}
-                  onExternalStateChange={setIsExternalActive}
+                  streamTrailDecayScale={streamTrailDecay}
+                  isEnhanced={true}
+                  luminanceModel="rec601"
+                  edgeStrength={0}
+                  contrastGamma={85}
+                  rainInterference={0}
+                  selectedDeviceId={selectedCamera}
+                  onStreamActive={() => refreshDevices()}
                 />
             </div>
           </div>
 
-          {/* Desktop Terminal */}
-          <div className="hidden lg:flex flex-col gap-2 min-h-0 h-full">
-            <TerminalOutput logs={logs} />
-          </div>
+          {!isBroadcastMode && showTerminal && (
+            <div className="hidden lg:flex flex-col gap-2 min-h-0">
+                <TerminalOutput 
+                    logs={logs} 
+                    onClose={() => setShowTerminal(false)}
+                />
+            </div>
+          )}
 
-          {/* SETTINGS PANEL (Non-blocking Overlay) */}
-          <aside 
-            className={`
-              fixed z-40 bg-black/95 border-green-800 shadow-[0_0_30px_rgba(0,0,0,0.9)] transition-transform duration-300 ease-in-out
-              /* Mobile: Bottom Sheet */
-              max-lg:inset-x-0 max-lg:bottom-0 max-lg:border-t max-lg:rounded-t-2xl max-lg:h-[60vh] max-lg:pb-8
-              ${isMenuOpen ? 'max-lg:translate-y-0' : 'max-lg:translate-y-[110%]'}
-              
-              /* Desktop: Right Floating Panel */
-              lg:absolute lg:top-0 lg:right-0 lg:bottom-0 lg:w-full lg:max-w-sm lg:border lg:rounded-lg lg:bg-black/90
-              ${isMenuOpen ? 'lg:translate-x-0' : 'lg:translate-x-[110%]'}
-            `}
-          >
-             <div className="h-full flex flex-col overflow-hidden">
-                {/* Panel Header */}
-                <div className="p-3 border-b border-green-900 text-xs font-bold text-green-500 uppercase flex justify-between items-center bg-green-900/10">
-                  <div className="flex items-center gap-2">
-                    <Settings className="w-4 h-4" />
-                    <span>Configuration Matrix</span>
+          <AnimatePresence>
+            {isMenuOpen && (
+              <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  onClick={() => setIsMenuOpen(false)}
+                  className="absolute inset-0 bg-black/80 backdrop-blur-md"
+                />
+                
+                <motion.div 
+                  initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                  className="relative w-full max-w-md bg-zinc-950 border border-green-900/30 rounded-xl shadow-2xl overflow-hidden flex flex-col"
+                >
+                  <div className="p-4 border-b border-green-900/20 flex justify-between items-center bg-green-950/5">
+                    <div className="flex items-center gap-3">
+                      <Settings className="w-4 h-4 text-green-500" />
+                      <h2 className="text-xs font-bold tracking-[0.3em] uppercase text-green-500">System Configuration</h2>
+                    </div>
+                    <button 
+                      onClick={() => setIsMenuOpen(false)}
+                      className="p-2 hover:bg-green-900/20 rounded-full transition-colors text-green-700 hover:text-green-400"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
                   </div>
-                  <button onClick={() => setIsMenuOpen(false)} className="hover:text-white transition-colors">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
 
-                {/* Scrollable Content */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-6">
-                  
-                  {/* Toggles */}
-                  <div className="space-y-3">
-                    <label className="flex items-center justify-between cursor-pointer active:bg-green-900/20 p-2 -mx-2 rounded transition-colors group">
-                      <div className="flex items-center gap-3">
-                        <MousePointer2 className="w-5 h-5 text-green-600" />
-                        <span className="text-sm font-medium text-green-400 group-hover:text-green-300">Interactive Zoom</span>
+                  <div className="p-6 space-y-8 max-h-[70vh] overflow-y-auto custom-scrollbar">
+                    {/* Camera Selection */}
+                    <div className="space-y-4">
+                      <div className="flex items-center gap-3 text-green-700">
+                        <Camera className="w-4 h-4" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest">Optical Sensor Input</span>
                       </div>
                       <div className="relative">
-                        <input type="checkbox" checked={zoomEnabled} onChange={toggleZoom} className="sr-only peer" />
-                        <div className="w-11 h-6 bg-green-900/50 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-green-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-400 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                        <select 
+                          value={selectedCamera} 
+                          onChange={(e) => setSelectedCamera(e.target.value)}
+                          className="w-full bg-black border border-green-900/40 text-green-400 text-sm p-3 rounded-lg outline-none focus:border-green-500 transition-all appearance-none cursor-pointer hover:border-green-700"
+                        >
+                          {videoDevices.length === 0 && <option value="">Probing Hardware...</option>}
+                          {videoDevices.map((device, idx) => (
+                            <option key={device.deviceId} value={device.deviceId}>
+                              {device.label || `Sensor Node ${idx + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-green-900">
+                          <Layers className="w-4 h-4" />
+                        </div>
                       </div>
-                    </label>
+                    </div>
 
-                    <label className="flex items-center justify-between cursor-pointer active:bg-green-900/20 p-2 -mx-2 rounded transition-colors group">
-                      <div className="flex items-center gap-3">
-                        <Layers className="w-5 h-5 text-green-600" />
-                        <span className="text-sm font-medium text-green-400 group-hover:text-green-300">Natural Color</span>
+                    {/* Stream Persistence */}
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <div className="flex items-center gap-3 text-green-700">
+                          <Activity className="w-4 h-4" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest">Temporal Persistence</span>
+                        </div>
+                        <span className="text-[10px] text-green-500 font-mono">{streamTrailDecay}%</span>
                       </div>
-                      <div className="relative">
-                        <input type="checkbox" checked={naturalColorMode} onChange={toggleNaturalColor} className="sr-only peer" />
-                        <div className="w-11 h-6 bg-green-900/50 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-green-500 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-gray-400 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="100" 
+                        value={streamTrailDecay} 
+                        onChange={(e) => setStreamTrailDecay(Number(e.target.value))} 
+                        className="w-full accent-green-500 h-1.5 bg-green-900/20 rounded-lg appearance-none cursor-pointer"
+                      />
+                      <div className="flex justify-between text-[8px] text-green-900 uppercase tracking-tighter">
+                        <span>Real-time</span>
+                        <span>Ghosting</span>
                       </div>
-                    </label>
+                    </div>
+
+                    {/* Toggles */}
+                    <div className="grid grid-cols-1 gap-3">
+                      <button 
+                        onClick={() => setNaturalColorMode(!naturalColorMode)}
+                        className={`flex items-center justify-between p-4 rounded-lg border transition-all ${naturalColorMode ? 'bg-green-950/20 border-green-500/50 text-green-400' : 'bg-black border-green-900/20 text-green-800 hover:border-green-900/50'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Layers className="w-4 h-4" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest">AR Chromatic Overlay</span>
+                        </div>
+                        <div className={`w-8 h-4 rounded-full relative transition-colors ${naturalColorMode ? 'bg-green-600' : 'bg-zinc-800'}`}>
+                          <div className={`absolute top-1 w-2 h-2 rounded-full bg-white transition-all ${naturalColorMode ? 'right-1' : 'left-1'}`} />
+                        </div>
+                      </button>
+
+                      <button 
+                        onClick={() => setShowTerminal(!showTerminal)}
+                        className={`flex items-center justify-between p-4 rounded-lg border transition-all ${showTerminal ? 'bg-green-950/20 border-green-500/50 text-green-400' : 'bg-black border-green-900/20 text-green-800 hover:border-green-900/50'}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Terminal className="w-4 h-4" />
+                          <span className="text-[10px] font-bold uppercase tracking-widest">Diagnostic Console</span>
+                        </div>
+                        <div className={`w-8 h-4 rounded-full relative transition-colors ${showTerminal ? 'bg-green-600' : 'bg-zinc-800'}`}>
+                          <div className={`absolute top-1 w-2 h-2 rounded-full bg-white transition-all ${showTerminal ? 'right-1' : 'left-1'}`} />
+                        </div>
+                      </button>
+                    </div>
+
+                    <div className="pt-6 border-t border-green-900/10 flex flex-col gap-2">
+                      <div className="flex justify-between text-[8px] text-green-900 uppercase tracking-[0.3em]">
+                        <span>Kernel Version</span>
+                        <span>v9.6.2-stable</span>
+                      </div>
+                      <div className="flex justify-between text-[8px] text-green-900 uppercase tracking-[0.3em]">
+                        <span>Security Protocol</span>
+                        <span>Encrypted-L3</span>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="border-t border-green-900/30"></div>
-
-                  {/* Sliders */}
-                  <div className="space-y-6">
-                    {/* Signal Sensitivity */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Activity className="w-4 h-4 text-green-600" />
-                            <span className="text-xs font-bold text-green-500 uppercase">Signal Sensitivity</span>
-                        </div>
-                        <span className="text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">{sensitivity}%</span>
-                      </div>
-                      <div className="relative h-6 flex items-center group">
-                        <div className="absolute w-full h-1.5 bg-green-900/50 rounded-full overflow-hidden">
-                           <div className="h-full bg-green-500 transition-all duration-75" style={{ width: `${sensitivity}%` }} />
-                        </div>
-                        <input type="range" min="0" max="100" value={sensitivity} onChange={handleSensitivityChange} className="absolute w-full h-full opacity-0 cursor-pointer" />
-                        <div className="absolute h-4 w-4 bg-black border-2 border-green-500 rounded-full shadow-[0_0_5px_#0f0] pointer-events-none transform -translate-x-1/2 transition-all duration-75 group-active:scale-125" style={{ left: `${sensitivity}%` }} />
-                      </div>
-                    </div>
-
-                    {/* Light Refraction */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Waves className="w-4 h-4 text-green-600" />
-                            <span className="text-xs font-bold text-green-500 uppercase">Signal Refraction</span>
-                        </div>
-                        <span className="text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">{refraction}%</span>
-                      </div>
-                      <div className="relative h-6 flex items-center group">
-                        <div className="absolute w-full h-1.5 bg-green-900/50 rounded-full overflow-hidden">
-                           <div className="h-full bg-cyan-500 transition-all duration-75" style={{ width: `${refraction}%` }} />
-                        </div>
-                        <input type="range" min="0" max="100" value={refraction} onChange={handleRefractionChange} className="absolute w-full h-full opacity-0 cursor-pointer" />
-                        <div className="absolute h-4 w-4 bg-black border-2 border-cyan-500 rounded-full shadow-[0_0_5px_cyan] pointer-events-none transform -translate-x-1/2 transition-all duration-75 group-active:scale-125" style={{ left: `${refraction}%` }} />
-                      </div>
-                    </div>
-
-                    {/* Decay Scale */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <ChevronsDown className="w-4 h-4 text-green-600" />
-                            <span className="text-xs font-bold text-green-500 uppercase">Decay Scale</span>
-                        </div>
-                        <span className="text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">{decayScale}%</span>
-                      </div>
-                      <div className="relative h-6 flex items-center group">
-                        <div className="absolute w-full h-1.5 bg-green-900/50 rounded-full overflow-hidden">
-                           <div className="h-full bg-purple-500 transition-all duration-75" style={{ width: `${decayScale}%` }} />
-                        </div>
-                        <input type="range" min="0" max="100" value={decayScale} onChange={handleDecayScaleChange} className="absolute w-full h-full opacity-0 cursor-pointer" />
-                        <div className="absolute h-4 w-4 bg-black border-2 border-purple-500 rounded-full shadow-[0_0_5px_purple] pointer-events-none transform -translate-x-1/2 transition-all duration-75 group-active:scale-125" style={{ left: `${decayScale}%` }} />
-                      </div>
-                    </div>
-
-                    {/* Pulse Frequency */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Zap className="w-4 h-4 text-green-600" />
-                            <span className="text-xs font-bold text-green-500 uppercase">Pulse Frequency</span>
-                        </div>
-                        <span className="text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">{range}%</span>
-                      </div>
-                      <div className="relative h-6 flex items-center group">
-                        <div className="absolute w-full h-1.5 bg-green-900/50 rounded-full overflow-hidden">
-                           <div className="h-full bg-yellow-500 transition-all duration-75" style={{ width: `${range}%` }} />
-                        </div>
-                        <input type="range" min="0" max="100" value={range} onChange={handleRangeChange} className="absolute w-full h-full opacity-0 cursor-pointer" />
-                        <div className="absolute h-4 w-4 bg-black border-2 border-yellow-500 rounded-full shadow-[0_0_5px_yellow] pointer-events-none transform -translate-x-1/2 transition-all duration-75 group-active:scale-125" style={{ left: `${range}%` }} />
-                      </div>
-                    </div>
-
-                    {/* Grid Density */}
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Grid className="w-4 h-4 text-green-600" />
-                            <span className="text-xs font-bold text-green-500 uppercase">Grid Density</span>
-                        </div>
-                        <span className="text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">{density}%</span>
-                      </div>
-                      <div className="relative h-6 flex items-center group">
-                        <div className="absolute w-full h-1.5 bg-green-900/50 rounded-full overflow-hidden">
-                           <div className="h-full bg-green-600 transition-all duration-75" style={{ width: `${density}%` }} />
-                        </div>
-                        <input type="range" min="0" max="100" value={density} onChange={handleDensityChange} className="absolute w-full h-full opacity-0 cursor-pointer" />
-                        <div className="absolute h-4 w-4 bg-black border-2 border-green-500 rounded-full shadow-[0_0_5px_#0f0] pointer-events-none transform -translate-x-1/2 transition-all duration-75 group-active:scale-125" style={{ left: `${density}%` }} />
-                      </div>
-                    </div>
-
+                  <div className="p-4 bg-green-950/5 border-t border-green-900/10">
+                    <button 
+                      onClick={() => setIsMenuOpen(false)}
+                      className="w-full py-3 bg-green-600 hover:bg-green-500 text-black font-bold text-[10px] uppercase tracking-[0.4em] rounded-lg transition-all shadow-lg shadow-green-900/20"
+                    >
+                      Apply Parameters
+                    </button>
                   </div>
-                </div>
-             </div>
-          </aside>
+                </motion.div>
+              </div>
+            )}
+          </AnimatePresence>
         </div>
 
-        {/* Mobile Footer Status (Visible only on mobile) */}
-        <div className="lg:hidden shrink-0 h-8 flex items-center px-2 border-t border-green-900/50 bg-black/60 backdrop-blur text-xs font-mono overflow-hidden whitespace-nowrap text-green-400/80">
-            <span className="animate-pulse mr-2">_</span>
-            {logs.length > 0 ? logs[logs.length - 1].message : "SYSTEM READY..."}
-        </div>
-
-        {/* Desktop Footer */}
-        <footer className="hidden lg:flex text-[10px] text-green-900 justify-between uppercase tracking-wider shrink-0">
-          <div>System Uptime: {Math.floor(performance.now() / 1000)}s</div>
-          <div>Gemini Vision: {process.env.API_KEY ? 'ONLINE' : 'STANDBY (OFFLINE MODE)'}</div>
+        {!isBroadcastMode && (
+        <footer className="flex justify-between text-[7px] text-green-950 tracking-[0.5em] uppercase shrink-0 border-t border-green-900/10 pt-2 opacity-60">
+          <div>SESSION_UPTIME: {Math.floor(performance.now() / 1000)}S</div>
+          <div className="hidden xs:block">SYSTEM_INTEGRITY: 100%</div>
         </footer>
+        )}
 
       </div>
     </div>

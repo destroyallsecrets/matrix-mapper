@@ -1,10 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
-const apiKey = process.env.API_KEY;
-// Gracefully handle missing API key by checking before instantiation
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-// Fallback responses for offline mode
 const OFFLINE_ANALYSIS_LOGS = [
   "Local heuristic complete. Structure: Ferro-concrete composite. Integrity: 94%.",
   "Bio-digital signature not found. Sector clear.",
@@ -19,16 +16,6 @@ const OFFLINE_ANALYSIS_LOGS = [
 export const analyzeSector = async (
   imageBase64: string
 ): Promise<string> => {
-  // Offline / Fallback Mode
-  if (!ai || !apiKey) {
-    // Simulate network latency and processing time
-    await new Promise(resolve => setTimeout(resolve, 1200 + Math.random() * 1000));
-    
-    const randomLog = OFFLINE_ANALYSIS_LOGS[Math.floor(Math.random() * OFFLINE_ANALYSIS_LOGS.length)];
-    return `[OFFLINE_CACHE] ${randomLog}`;
-  }
-
-  // Real AI Analysis
   const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
 
   const prompt = `
@@ -51,13 +38,14 @@ export const analyzeSector = async (
       },
       config: {
         maxOutputTokens: 150,
-        temperature: 0.7,
+        temperature: 0.7
       }
     });
     
     return response.text || "Visual analysis inconclusive. Signal lost.";
   } catch (error) {
     console.error("Gemini Vision Error:", error);
-    return "WARNING: Neural uplink unstable. Analysis failed.";
+    const randomLog = OFFLINE_ANALYSIS_LOGS[Math.floor(Math.random() * OFFLINE_ANALYSIS_LOGS.length)];
+    return `[LOCAL_OVERRIDE] ${randomLog}`;
   }
 };

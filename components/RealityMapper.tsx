@@ -1,4 +1,6 @@
+
 import React, { useEffect, useRef, forwardRef, useImperativeHandle, useState } from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 interface RealityMapperProps {
   isScanning: boolean;
@@ -6,534 +8,480 @@ interface RealityMapperProps {
   showColor: boolean;
   gridSize: number;
   enableZoom: boolean;
-  sensitivity: number;   // 0-100: How hard the signal hits
-  refraction: number;    // 0-100: Signal amplification / Noise floor
-  range: number;         // 0-100: Simulation speed/Pulse frequency
-  decayScale: number;    // 0-100: Length of the matrix trail & Decay rate
+  sensitivity: number;
+  refraction: number;
+  diffusion: number;
+  ambientLight: number;
+  bloomThreshold: number;
+  range: number;
+  decayScale: number;
+  streamTrailDecayScale: number;
+  isEnhanced: boolean;
+  luminanceModel: 'rec601' | 'average';
+  edgeStrength: number;
+  contrastGamma: number;
+  rainInterference: number;
+  showFeed: boolean;
+  selectedDeviceId?: string;
+  onStreamActive?: () => void;
   onExternalStateChange?: (isActive: boolean) => void;
 }
 
 export interface RealityMapperHandle {
   getSnapshot: () => string | null;
-  toggleExternalWindow: () => void;
+  togglePiP: () => Promise<void>;
+  startRecording: () => void;
+  stopRecording: () => Promise<Blob | null>;
 }
 
-const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>(({ 
-  isScanning, 
-  mode, 
-  showColor, 
-  gridSize, 
-  enableZoom,
-  sensitivity,
-  refraction,
-  range,
-  decayScale,
-  onExternalStateChange 
-}, ref) => {
+const RealityMapper = forwardRef<RealityMapperHandle, RealityMapperProps>((props, ref) => {
+  const { 
+    showColor, 
+    gridSize, 
+    sensitivity,
+    decayScale,
+    streamTrailDecayScale,
+    selectedDeviceId,
+    onStreamActive
+  } = props;
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
   const animationRef = useRef<number | null>(null);
+  const frameCountRef = useRef<number>(0);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
+  // PiP Video Reference
+  const pipVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // Performance-optimized buffers
+  const energyBufferRef = useRef<Float32Array | null>(null);
+  const prevLumaBufferRef = useRef<Float32Array | null>(null);
+  const currentLumaBufferRef = useRef<Float32Array | null>(null);
+  const dropsRef = useRef<Float32Array | null>(null); 
   
-  // Physics State
-  // We use a persistent buffer for "Grid Energy" to simulate light refraction/decay
-  const gridEnergyRef = useRef<Float32Array | null>(null);
-  const dropsRef = useRef<number[]>([]);
+  // Video processing pipeline
+  const smallCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const smallCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   
-  // Zoom & Pan State
-  const transformRef = useRef({ x: 0, y: 0, scale: 1 });
-  const isDraggingRef = useRef(false);
-  const lastPosRef = useRef({ x: 0, y: 0 });
-  const lastTouchDistRef = useRef<number>(0);
-  
-  // External Window State
-  const [externalActive, setExternalActive] = useState(false);
-  const externalWindowRef = useRef<Window | null>(null);
-  
-  // Character Sets
-  const CHARS_HIGH = "10"; // High energy / Solid
-  const CHARS_MED = "01"; // Medium energy / Semi-solid
-  const CHARS_LOW = "-:";  // Low energy / Fading trail
-
-  // --- External Window & Lifecycle ---
-  const toggleExternalWindow = () => {
-    if (externalActive) {
-      externalWindowRef.current?.close();
-      setExternalActive(false);
-      onExternalStateChange?.(false);
-      externalWindowRef.current = null;
-    } else {
-      if (!canvasRef.current) return;
-      const width = 800;
-      const height = 600;
-      const left = (window.screen.width - width) / 2;
-      const top = (window.screen.height - height) / 2;
-      const newWindow = window.open('', 'MatrixFeed', `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no`);
-
-      if (newWindow) {
-        externalWindowRef.current = newWindow;
-        newWindow.document.title = "MATRIX // SIGNAL_OUTPUT";
-        newWindow.document.body.style.margin = '0';
-        newWindow.document.body.style.backgroundColor = '#000';
-        newWindow.document.body.style.overflow = 'hidden';
-        newWindow.document.body.style.display = 'flex';
-        newWindow.document.body.style.justifyContent = 'center';
-        newWindow.document.body.style.alignItems = 'center';
-        const video = newWindow.document.createElement('video');
-        video.autoplay = true;
-        video.muted = true;
-        video.style.width = '100vw';
-        video.style.height = '100vh';
-        video.style.objectFit = 'contain';
-        newWindow.document.body.appendChild(video);
-
-        // @ts-ignore
-        if (canvasRef.current.captureStream) {
-            // @ts-ignore
-            const stream = canvasRef.current.captureStream(30);
-            video.srcObject = stream;
-        }
-
-        newWindow.addEventListener('beforeunload', () => {
-          setExternalActive(false);
-          onExternalStateChange?.(false);
-          externalWindowRef.current = null;
-        });
-
-        setExternalActive(true);
-        onExternalStateChange?.(true);
-      }
-    }
-  };
+  // Recording
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
 
   useImperativeHandle(ref, () => ({
     getSnapshot: () => {
-      if (!videoRef.current) return null;
-      const snapshotCanvas = document.createElement('canvas');
-      snapshotCanvas.width = videoRef.current.videoWidth;
-      snapshotCanvas.height = videoRef.current.videoHeight;
-      const ctx = snapshotCanvas.getContext('2d');
-      if (!ctx) return null;
-      ctx.drawImage(videoRef.current, 0, 0);
-      return snapshotCanvas.toDataURL('image/jpeg', 0.8);
+      if (!canvasRef.current) return null;
+      return canvasRef.current.toDataURL('image/png');
     },
-    toggleExternalWindow: () => toggleExternalWindow()
-  }), [externalActive]);
-
-  // Reset zoom when disabled
-  useEffect(() => {
-    if (!enableZoom) {
-      transformRef.current = { x: 0, y: 0, scale: 1 };
-    }
-  }, [enableZoom]);
-
-  // --- Interaction Handlers (Zoom/Pan) ---
-  const handleWheel = (e: React.WheelEvent) => {
-    if (!enableZoom) return;
-    e.preventDefault();
-    const intensity = 0.001;
-    const { x, y, scale } = transformRef.current;
-    let newScale = scale - e.deltaY * intensity * scale;
-    newScale = Math.min(Math.max(1, newScale), 5);
-    if (newScale === scale) return;
-
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    const ratio = newScale / scale;
-    let newX = mouseX - (mouseX - x) * ratio;
-    let newY = mouseY - (mouseY - y) * ratio;
-
-    const canvasWidth = rect.width;
-    const canvasHeight = rect.height;
-    const minX = canvasWidth - canvasWidth * newScale;
-    const minY = canvasHeight - canvasHeight * newScale;
-    
-    newX = Math.min(0, Math.max(minX, newX));
-    newY = Math.min(0, Math.max(minY, newY));
-
-    transformRef.current = { x: newX, y: newY, scale: newScale };
-  };
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (!enableZoom) return;
-    isDraggingRef.current = true;
-    lastPosRef.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!enableZoom || !isDraggingRef.current) return;
-    e.preventDefault();
-    const dx = e.clientX - lastPosRef.current.x;
-    const dy = e.clientY - lastPosRef.current.y;
-    lastPosRef.current = { x: e.clientX, y: e.clientY };
-    const { x, y, scale } = transformRef.current;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    let newX = x + dx;
-    let newY = y + dy;
-    const minX = rect.width - rect.width * scale;
-    const minY = rect.height - rect.height * scale;
-    newX = Math.min(0, Math.max(minX, newX));
-    newY = Math.min(0, Math.max(minY, newY));
-    transformRef.current = { x: newX, y: newY, scale };
-  };
-
-  const handleMouseUp = () => {
-    isDraggingRef.current = false;
-  };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    if (!enableZoom) return;
-    if (e.touches.length === 1) {
-        isDraggingRef.current = true;
-        lastPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    } else if (e.touches.length === 2) {
-        isDraggingRef.current = false;
-        const dist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-        );
-        lastTouchDistRef.current = dist;
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (!enableZoom) return;
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    if (e.touches.length === 1 && isDraggingRef.current) {
-        const dx = e.touches[0].clientX - lastPosRef.current.x;
-        const dy = e.touches[0].clientY - lastPosRef.current.y;
-        lastPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-        const { x, y, scale } = transformRef.current;
-        let newX = x + dx;
-        let newY = y + dy;
-        const minX = rect.width - rect.width * scale;
-        const minY = rect.height - rect.height * scale;
-        newX = Math.min(0, Math.max(minX, newX));
-        newY = Math.min(0, Math.max(minY, newY));
-        transformRef.current = { x: newX, y: newY, scale };
-    }
-    
-    if (e.touches.length === 2) {
-        const dist = Math.hypot(
-            e.touches[0].clientX - e.touches[1].clientX,
-            e.touches[0].clientY - e.touches[1].clientY
-        );
-        
-        if (lastTouchDistRef.current > 0) {
-            const delta = dist - lastTouchDistRef.current;
-            const { x, y, scale } = transformRef.current;
-            const zoomSpeed = 0.005;
-            let newScale = scale + delta * zoomSpeed * scale;
-            newScale = Math.min(Math.max(1, newScale), 5);
-            const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-            const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-            const ratio = newScale / scale;
-            let newX = centerX - (centerX - x) * ratio;
-            let newY = centerY - (centerY - y) * ratio;
-            const minX = rect.width - rect.width * newScale;
-            const minY = rect.height - rect.height * newScale;
-            newX = Math.min(0, Math.max(minX, newX));
-            newY = Math.min(0, Math.max(minY, newY));
-            transformRef.current = { x: newX, y: newY, scale: newScale };
-        }
-        lastTouchDistRef.current = dist;
-    }
-  };
-
-  useEffect(() => {
-    return () => {
-      if (externalWindowRef.current) externalWindowRef.current.close();
-    };
-  }, []);
-
-  // Handle Resize
-  useEffect(() => {
-    const handleResize = () => {
-        if (containerRef.current && canvasRef.current) {
-            const rect = containerRef.current.getBoundingClientRect();
-            canvasRef.current.width = rect.width;
-            canvasRef.current.height = rect.height;
-            // Clear Physics buffers on resize to avoid alignment errors
-            gridEnergyRef.current = null; 
-            dropsRef.current = [];
-            transformRef.current = { x: 0, y: 0, scale: 1 };
-        }
-    };
-    const observer = new ResizeObserver(handleResize);
-    if (containerRef.current) observer.observe(containerRef.current);
-    handleResize();
-    return () => observer.disconnect();
-  }, []);
-
-  // Webcam Logic
-  useEffect(() => {
-    let stream: MediaStream | null = null;
-    let mounted = true;
-
-    const startWebcam = async () => {
+    startRecording: () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      // @ts-ignore
+      const stream = canvas.captureStream(30);
       try {
-        if (videoRef.current && videoRef.current.srcObject) {
-            const oldStream = videoRef.current.srcObject as MediaStream;
-            oldStream.getTracks().forEach(track => track.stop());
+        const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9' });
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+          }
+        };
+        mediaRecorder.start();
+        mediaRecorderRef.current = mediaRecorder;
+      } catch (e) {
+        console.error("MediaRecorder error:", e);
+        // Fallback for Safari/iOS
+        try {
+          const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/mp4' });
+          mediaRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) {
+              recordedChunksRef.current.push(event.data);
+            }
+          };
+          mediaRecorder.start();
+          mediaRecorderRef.current = mediaRecorder;
+        } catch (fallbackError) {
+          console.error("MediaRecorder fallback error:", fallbackError);
         }
-        const newStream = await navigator.mediaDevices.getUserMedia({ 
-          video: { width: 1280, height: 720, facingMode: "user" } 
-        });
-        if (!mounted) {
-            newStream.getTracks().forEach(track => track.stop());
-            return;
+      }
+    },
+    stopRecording: () => {
+      return new Promise((resolve) => {
+        if (!mediaRecorderRef.current) {
+          resolve(null);
+          return;
         }
-        stream = newStream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(e => console.error("Video play error:", e));
+        mediaRecorderRef.current.onstop = () => {
+          const mimeType = mediaRecorderRef.current?.mimeType || 'video/webm';
+          const blob = new Blob(recordedChunksRef.current, { type: mimeType });
+          recordedChunksRef.current = [];
+          resolve(blob);
+        };
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current = null;
+      });
+    },
+    togglePiP: async () => {
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        } else {
+          const canvas = canvasRef.current;
+          if (!canvas) return;
+
+          if (!pipVideoRef.current) {
+            pipVideoRef.current = document.createElement('video');
+            pipVideoRef.current.muted = true;
+            pipVideoRef.current.playsInline = true;
+          }
+          
+          const pipVideo = pipVideoRef.current;
+          // @ts-ignore
+          if (canvas.captureStream && (pipVideo.srcObject === null || pipVideo.srcObject === undefined)) {
+             // @ts-ignore
+             const stream = canvas.captureStream(30);
+             pipVideo.srcObject = stream;
+             await pipVideo.play();
+          }
+          
+          if (pipVideo.readyState >= 1) { 
+             await pipVideo.requestPictureInPicture();
+          } else {
+             pipVideo.onloadedmetadata = async () => {
+               await pipVideo.requestPictureInPicture();
+             }
+          }
         }
       } catch (err) {
-        if (mounted) console.error("Error accessing webcam:", err);
+        console.error("PiP Error:", err);
+      }
+    }
+  }));
+
+  useEffect(() => {
+    let activeStream: MediaStream | null = null;
+    let isCancelled = false;
+
+    const initSensors = async () => {
+      setCameraError(null);
+      try {
+        const vConstraints = { 
+          video: { 
+            deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+            width: { ideal: 1280 }, 
+            height: { ideal: 720 },
+            facingMode: selectedDeviceId ? undefined : { ideal: "environment" }
+          } 
+        };
+        const stream = await navigator.mediaDevices.getUserMedia(vConstraints);
+        if (isCancelled) { stream.getTracks().forEach(t => t.stop()); return; }
+        activeStream = stream;
+        if (videoRef.current) { 
+          videoRef.current.srcObject = stream; 
+          videoRef.current.play().catch(() => {}); 
+          onStreamActive?.();
+        }
+      } catch (err: any) {
+        if (!isCancelled) setCameraError(err.name === 'NotAllowedError' ? "ACCESS DENIED" : "SENSOR_ERROR");
       }
     };
-    startWebcam();
-    return () => {
-      mounted = false;
-      if (stream) stream.getTracks().forEach(track => track.stop());
-      if (videoRef.current) videoRef.current.srcObject = null;
-    };
-  }, []);
 
-  // Main Physics & Render Loop
+    initSensors();
+
+    return () => {
+      isCancelled = true;
+      activeStream?.getTracks().forEach(t => t.stop());
+    };
+  }, [selectedDeviceId]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const video = videoRef.current;
     if (!canvas || !video) return;
-
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
 
-    const fontSize = Math.max(4, Math.round(gridSize));
-    let frameCount = 0;
+    if (!smallCanvasRef.current) {
+      smallCanvasRef.current = document.createElement('canvas');
+      smallCtxRef.current = smallCanvasRef.current.getContext('2d', { willReadFrequently: true });
+    }
+    const smallCanvas = smallCanvasRef.current;
+    const smallCtx = smallCtxRef.current;
 
     const render = () => {
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        const width = canvas.width;
-        const height = canvas.height;
-        if (width === 0 || height === 0) return;
+        const displayWidth = canvas.clientWidth;
+        const displayHeight = canvas.clientHeight;
+        if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+          canvas.width = displayWidth;
+          canvas.height = displayHeight;
+        }
 
-        const columns = Math.ceil(width / fontSize);
-        const rows = Math.ceil(height / fontSize);
-        const numCells = columns * rows;
+        const fontSize = Math.max(5, Math.round(gridSize));
+        const cols = Math.ceil(canvas.width / fontSize);
+        const rows = Math.ceil(canvas.height / fontSize);
+        const numCells = cols * rows;
 
-        // --- 1. Downsample Video ---
-        const smallCanvas = document.createElement('canvas');
-        smallCanvas.width = columns;
-        smallCanvas.height = rows;
-        const smallCtx = smallCanvas.getContext('2d');
-        
-        if (smallCtx) {
-           smallCtx.translate(columns, 0);
-           smallCtx.scale(-1, 1);
-           smallCtx.drawImage(video, 0, 0, columns, rows);
-           const imageData = smallCtx.getImageData(0, 0, columns, rows);
-           const pixels = imageData.data;
+        // Initialize or Resize Vertical Drops Buffer
+        if (!dropsRef.current || dropsRef.current.length !== cols) {
+            dropsRef.current = new Float32Array(cols);
+            for (let i = 0; i < cols; i++) {
+                dropsRef.current[i] = Math.random() * -rows; 
+            }
+        }
+        const drops = dropsRef.current;
+        frameCountRef.current++;
+        const frameTick = frameCountRef.current;
 
-           // --- 2. Initialize or Resize Physics Buffers ---
-           if (!gridEnergyRef.current || gridEnergyRef.current.length !== numCells) {
-               gridEnergyRef.current = new Float32Array(numCells).fill(0);
-               dropsRef.current = Array(columns).fill(0).map(() => Math.random() * -100);
-           }
-           
-           const energyGrid = gridEnergyRef.current;
+        // Vertical Stream Update
+        for (let i = 0; i < cols; i++) {
+            drops[i] += 0.4; 
+            if (drops[i] > rows) {
+                drops[i] = -20 - (Math.random() * 50); 
+            }
+        }
 
-           // --- 3. Physics Simulation (Pulse vs Decay) ---
-           // Calculate settings derived values
-           const sensMult = (sensitivity / 50); // 0.0 - 2.0
-           
-           // Map decayScale (0-100) to length (Expanded range for more impact)
-           // 5 frames to ~300 frames (0.1s to 5s)
-           const streamLen = Math.max(5, Math.floor(decayScale * 3));
-           
-           // Base decay calculation
-           // We want energy to fade to ~0.01 (black) over streamLen frames
-           const baseDecay = Math.pow(0.01, 1 / streamLen);
-           
-           // Refraction adds random noise floor
-           const noiseChance = 0.0002 + (refraction / 100) * 0.0008;
+        if (smallCtx && cols > 0 && rows > 0) {
+          smallCanvas.width = cols; 
+          smallCanvas.height = rows;
+          
+          // Fast aspect ratio calc
+          const videoAspect = video.videoWidth / video.videoHeight;
+          const canvasAspect = cols / rows; 
+          
+          let sx = 0, sy = 0, sw = video.videoWidth, sh = video.videoHeight;
 
-           // Process Grid
-           for (let i = 0; i < numCells; i++) {
-               const r = pixels[i * 4];
-               const g = pixels[i * 4 + 1];
-               const b = pixels[i * 4 + 2];
-               
-               // Calculate input brightness (The "Solidness")
-               const brightness = (r + g + b) / 3 / 255.0; 
-               
-               // Add new energy based on sensitivity
-               const noiseGate = 0.05;
-               let inputSignal = Math.max(0, brightness - noiseGate) * sensMult;
+          if (canvasAspect > videoAspect) {
+             sh = sw / canvasAspect;
+             sy = (video.videoHeight - sh) / 2;
+          } else {
+             sw = sh * canvasAspect;
+             sx = (video.videoWidth - sw) / 2;
+          }
 
-               // Inject random noise for "Idle" activity
-               if (Math.random() < noiseChance) {
-                   inputSignal = Math.max(inputSignal, Math.random() * 0.5 + 0.2); 
-               }
-               
-               // DYNAMIC DECAY ("Phosphor Burn" effect)
-               // Solid surfaces (high energy) burn in and decay SLOWER than weak signals.
-               // We modulate the decay factor by the current stored energy.
-               // High stored energy -> Slower decay (closer to 1.0)
-               // Low stored energy -> Faster decay (baseDecay)
-               const persistenceBonus = (energyGrid[i] * 0.02) * (decayScale / 50); 
-               const effectiveDecay = Math.min(0.995, baseDecay + persistenceBonus);
+          smallCtx.drawImage(video, sx, sy, sw, sh, 0, 0, cols, rows);
+          const pixels = smallCtx.getImageData(0, 0, cols, rows).data;
 
-               // Update Energy
-               // We take the max of (Decayed Past) vs (New Signal)
-               energyGrid[i] = Math.max(energyGrid[i] * effectiveDecay, inputSignal);
-               
-               // Cap at 1.0
-               if (energyGrid[i] > 1.0) energyGrid[i] = 1.0;
-           }
+          if (!energyBufferRef.current || energyBufferRef.current.length !== numCells) {
+            energyBufferRef.current = new Float32Array(numCells).fill(0);
+            prevLumaBufferRef.current = new Float32Array(numCells).fill(0);
+            currentLumaBufferRef.current = new Float32Array(numCells).fill(0);
+          }
+          
+          const energyGrid = energyBufferRef.current;
+          const prevLuma = prevLumaBufferRef.current!;
+          const currentLuma = currentLumaBufferRef.current!;
 
-           // --- 4. Matrix Drop Logic ---
-           const speedMult = 0.5 + (range / 50); // Speed modifier
-           
-           for (let i = 0; i < dropsRef.current.length; i++) {
-               // Drops fall faster if the column has high total energy
-               const midIdx = Math.floor(rows/2) * columns + i;
-               const colEnergy = energyGrid[midIdx];
-               
-               const dropSpeed = (0.2 + colEnergy * 1.5) * speedMult;
-               dropsRef.current[i] += dropSpeed;
-               
-               if (dropsRef.current[i] > rows + 40) {
-                   dropsRef.current[i] = -Math.random() * 40; 
-               }
-           }
+          const baseDecay = 0.5 + (decayScale / 100) * 0.3; 
+          const streamDecayFactor = 0.05 + (streamTrailDecayScale / 100) * 0.93; 
+          const attack = 0.4; 
 
-           // --- 5. Rendering ---
-           ctx.setTransform(1, 0, 0, 1, 0, 0);
-           ctx.fillStyle = '#000000';
-           ctx.fillRect(0, 0, width, height);
-           
-           // Apply Zoom
-           const { x, y, scale } = transformRef.current;
-           ctx.setTransform(scale, 0, 0, scale, x, y);
+          const bayerMatrix = [
+            [ 0/16,  8/16,  2/16, 10/16],
+            [12/16,  4/16, 14/16,  6/16],
+            [ 3/16, 11/16,  1/16,  9/16],
+            [15/16,  7/16, 13/16,  5/16]
+          ];
 
-           ctx.font = `${fontSize}px 'Fira Code', monospace`;
-           ctx.textBaseline = 'top';
+          let totalLuma = 0;
 
-           for (let cy = 0; cy < rows; cy++) {
-             const rowOffset = cy * columns;
-             for (let cx = 0; cx < columns; cx++) {
-               const idx = rowOffset + cx;
-               const energy = energyGrid[idx];
+          // --- PASS 1: Physics & Energy (Optimized) ---
+          for (let i = 0; i < numCells; i++) {
+            const ix = i << 2;
+            // Rec.709 luma coeff for better perceptual mapping
+            const luma = (pixels[ix] * 0.2126 + pixels[ix + 1] * 0.7152 + pixels[ix + 2] * 0.0722) / 255;
+            totalLuma += luma;
+            currentLuma[i] = luma;
+            
+            const delta = Math.abs(luma - prevLuma[i]);
+            prevLuma[i] = luma;
 
-               // --- Matrix Stream (Rain) Calculations ---
-               const dropHead = dropsRef.current[cx];
-               const dist = dropHead - cy;
-               
-               let isHead = false;
-               let streamOpacity = 0;
+            let target = 0.0;
+            // Simplified threshold logic
+            if (luma > 0.6 || delta > 0.1) target = 1.0;
+            
+            if (target > energyGrid[i]) {
+                energyGrid[i] += (target - energyGrid[i]) * attack;
+            } else {
+                energyGrid[i] *= (energyGrid[i] > 0.3 ? streamDecayFactor : baseDecay);
+            }
+          }
+          
+          const avgLuma = totalLuma / numCells;
+          // Adaptive gamma correction based on average luma
+          // Lowered gamma significantly to make the image darker and more contrasted
+          const adaptiveGamma = avgLuma < 0.3 ? 2.2 : (avgLuma > 0.7 ? 1.5 : 1.8);
 
-               // Calculate tail based on decayScale so rain matches background decay
-               if (dist >= 0 && dist < 1) {
-                   isHead = true;
-               } else if (dist > 0 && dist < streamLen) {
-                   streamOpacity = (1 - (dist / streamLen)) * 0.95; 
-               }
+          // --- PASS 2: Rendering ---
+          ctx.fillStyle = '#000800'; 
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.font = `bold ${fontSize}px 'Fira Code', monospace`;
+          ctx.textBaseline = 'top';
 
-               // --- Optimization: Skip empty space ---
-               if (energy < 0.02 && streamOpacity < 0.02) {
-                   continue;
-               }
+          // Pre-calculate
+          const gridPulse = 0;
+          // Sine wave for solarization (dynamic brights)
+          // Peaks at 1.0, dips to -0.2
+          const solarPulse = Math.sin(frameTick * 0.1); 
+          const brightModulator = 0.4 + (solarPulse * 0.3); // fluctuates 0.1 to 0.7 - compressed highlights
 
-               // --- Character Selection ---
-               let char = '';
-               // Combined visibility (Rain + Background Reality)
-               const effectiveEnergy = Math.max(energy, streamOpacity);
-               
-               if (effectiveEnergy > 0.85) {
-                   const charIdx = (cx + cy + frameCount) % CHARS_HIGH.length;
-                   char = CHARS_HIGH[charIdx];
-               } else if (effectiveEnergy > 0.4) {
-                   const charIdx = (cx * cy) % CHARS_MED.length;
-                   char = CHARS_MED[charIdx];
-               } else {
-                   const charIdx = (cx + cy) % CHARS_LOW.length;
-                   char = CHARS_LOW[charIdx];
-               }
+          for (let i = 0; i < numCells; i++) {
+            const ix = i << 2;
+            const r = pixels[ix];
+            const g = pixels[ix+1];
+            const b = pixels[ix+2];
+            
+            // Rec.709
+            let lumaNorm = (r * 0.2126 + g * 0.7152 + b * 0.0722) / 255;
+            
+            // Apply adaptive gamma
+            lumaNorm = Math.pow(lumaNorm, adaptiveGamma);
 
-               // --- Color / Style ---
-               let fillStyle = '';
+            // --- Structural Mapping (Shadow Lifting) ---
+            // Replaced pow() with a quadratic ease-out: x * (2.5 - x)
+            // This lifts the 0.1-0.4 range significantly ("seeing in the dark") 
+            // while preserving the 1.0 range.
+            let structure = lumaNorm * (1.8 - lumaNorm); // Lowered structure multiplier
+            
+            // --- Dynamic Solarization (Bright Light Compression) ---
+            // If light is very bright, we "invert" or dim it dynamically to show sensor overload
+            // Compressed highlights threshold
+            if (lumaNorm > 0.6) {
+                // As luma goes 0.6 -> 1.0, we mix in the modulator
+                // This makes bright lights pulse or turn dark green
+                structure = structure * brightModulator;
+            }
 
-               if (isHead) {
-                   fillStyle = '#ffffff'; 
-               } else if (showColor) {
-                  const r = pixels[idx * 4];
-                  const g = pixels[idx * 4 + 1];
-                  const b = pixels[idx * 4 + 2];
-                  const boost = streamOpacity * 255;
-                  fillStyle = `rgba(${Math.min(255, r+boost)},${Math.min(255, g+boost)},${Math.min(255, b+boost)},${effectiveEnergy})`;
-               } else {
-                  if (effectiveEnergy > 0.9) {
-                      fillStyle = '#ccffcc'; // Brightest
-                  } else if (effectiveEnergy > 0.6) {
-                      fillStyle = `rgba(100, 255, 100, ${effectiveEnergy})`;
-                  } else {
-                      // Fading trail - darker green
-                      // Map lower energy to a dimmer, more transparent green
-                      const dimness = Math.floor(effectiveEnergy * 200);
-                      fillStyle = `rgba(0, ${dimness + 50}, 0, ${effectiveEnergy})`;
+            const cx = i % cols;
+            const cy = (i / cols) | 0;
+
+            // Fast Edge Check (Laplacian 4-neighbor approximation)
+            let edge = 0;
+            if (cx > 0 && cx < cols - 1 && cy > 0 && cy < rows - 1) {
+               const pLeft = currentLuma[i - 1];
+               const pRight = currentLuma[i + 1];
+               const pUp = currentLuma[i - cols];
+               const pDown = currentLuma[i + cols];
+               // Laplacian operator
+               edge = Math.abs(4 * currentLuma[i] - pLeft - pRight - pUp - pDown);
+            }
+
+            const energy = energyGrid[i];
+            const dropY = drops[cx];
+            const dist = dropY - cy;
+            const isRain = dist > 0 && dist < 15;
+            const isRainHead = dist > 0 && dist < 2;
+
+            // --- Binary Optimization: Enhanced Dithering & Edge Mapping ---
+            const bayerThreshold = bayerMatrix[cy % 4][cx % 4];
+            
+            let char = " ";
+            if (energy > 0.5) {
+                char = lumaNorm > bayerThreshold ? "1" : "0";
+            } else if (isRain) {
+                char = ((i + frameTick) & 4) ? "1" : "0"; // pattern based
+            } else if (edge > 0.15) {
+                // Edges are always represented to preserve shapes
+                char = "1";
+            } else {
+                // Better light to binary conversion
+                if (structure > 0.6) {
+                    char = "1"; // Solid highlights
+                } else if (structure > 0.25) {
+                    // Dithered midtones
+                    char = structure > bayerThreshold * 0.8 + 0.1 ? "1" : "0";
+                } else if (structure > 0.08) {
+                    // Sparse darks
+                    char = structure > bayerThreshold * 1.5 ? "0" : " ";
+                } else {
+                    char = " "; // True darkness
+                }
+            }
+
+            if (showColor) {
+              // Natural Mode logic
+              const saturation = 0.4 + (energy * 0.6); 
+              const lumaByte = lumaNorm * 255;
+              
+              let arR = r * saturation + lumaByte * (1 - saturation);
+              let arG = g * saturation + lumaByte * (1 - saturation);
+              let arB = b * saturation + lumaByte * (1 - saturation);
+
+              const exposure = 0.8 + (energy * 0.5); 
+              arR *= exposure; arG *= exposure; arB *= exposure;
+
+              if (energy < 0.3) { arB += 15; arR -= 5; }
+              
+              // Integer clamp
+              const fr = (arR > 255 ? 255 : (arR < 0 ? 0 : arR)) | 0;
+              const fg = (arG > 255 ? 255 : (arG < 0 ? 0 : arG)) | 0;
+              const fb = (arB > 255 ? 255 : (arB < 0 ? 0 : arB)) | 0;
+
+              ctx.fillStyle = `rgb(${fr},${fg},${fb})`;
+
+            } else {
+              // Terminal Mode (Optimized)
+
+              // Base Ambient: 24 (visible darks)
+              // Structure Gain: 180 (contrast)
+              let val = 24 + (structure * 180);
+              
+              // Add edge glow modulated by structure
+              if (edge > 0.1) {
+                  val += edge * 150 * (0.5 + structure);
+              }
+
+              const digitalGreen = energy * 220;
+              let rainGreen = 0;
+              let rainHighlight = 0;
+
+              if (isRain) {
+                  const rainIntensity = isRainHead ? 1.0 : 0.4;
+                  rainGreen = (rainIntensity * 30) + (rainIntensity * structure * 180);
+                  if (isRainHead && structure > 0.3) {
+                      rainHighlight = 120 * structure;
                   }
-               }
-               
-               ctx.fillStyle = fillStyle;
-               ctx.fillText(char, cx * fontSize, cy * fontSize);
-             }
-           }
+              }
+              
+              let totalG = val + digitalGreen + gridPulse + rainGreen;
+              let totalRB = rainHighlight;
+
+              if (energy > 0.75) {
+                  // Thermal bloom
+                  totalRB += (energy - 0.75) * 600; // Stronger kick
+                  totalG += 60; 
+              }
+
+              // Fast Clamping
+              totalG = (totalG > 255 ? 255 : totalG) | 0;
+              totalRB = (totalRB > 255 ? 255 : totalRB) | 0;
+
+              // String concats are inevitable but fast enough here
+              ctx.fillStyle = `rgb(${totalRB},${totalG},${totalRB})`;
+            }
+
+            ctx.fillText(char, cx * fontSize, cy * fontSize);
+          }
         }
       }
-      
-      frameCount++;
       animationRef.current = requestAnimationFrame(render);
     };
-
+    
     render();
-
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [isScanning, showColor, gridSize, sensitivity, refraction, range, decayScale]); 
+    return () => { if (animationRef.current) cancelAnimationFrame(animationRef.current); };
+  }, [gridSize, sensitivity, decayScale, streamTrailDecayScale, showColor]);
 
   return (
-    <div 
-      ref={containerRef} 
-      className={`relative w-full h-full border border-green-900 bg-black rounded-lg overflow-hidden shadow-[0_0_15px_rgba(0,255,0,0.2)] ${enableZoom ? 'cursor-grab active:cursor-grabbing touch-none' : ''}`}
-      onWheel={handleWheel}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleMouseUp}
-    >
+    <div className="relative w-full h-full bg-black overflow-hidden select-none">
       <video ref={videoRef} className="hidden" playsInline muted />
-      <canvas 
-        ref={canvasRef} 
-        className="block bg-black"
-        style={{ width: '100%', height: '100%' }}
-      />
-
-      {externalActive && (
-        <div className="absolute top-4 left-4 z-30 flex items-center gap-2 pointer-events-none animate-in fade-in slide-in-from-top-2">
-            <div className="w-2.5 h-2.5 rounded-full bg-red-500 animate-[pulse_1s_ease-in-out_infinite] shadow-[0_0_8px_#f00]" />
-            <span className="text-[10px] font-bold text-red-500 tracking-widest bg-black/60 px-1.5 py-0.5 rounded border border-red-900/30 backdrop-blur-sm">
-                REC / EXT_FEED
-            </span>
+      <canvas ref={canvasRef} className="block w-full h-full cursor-none object-cover" />
+      {cameraError && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/98 p-10 text-center backdrop-blur-sm">
+          <AlertTriangle className="w-12 h-12 text-green-900 mb-6" />
+          <h2 className="text-green-500 font-bold uppercase tracking-[0.4em] text-sm mb-4">SENSOR_DISCONNECT</h2>
+          <div className="w-32 h-[1px] bg-green-900/50 mb-4" />
+          <p className="text-green-900 text-[10px] uppercase tracking-tighter leading-relaxed max-w-xs">
+            Visual link failed. Please verify hardware permissions and cycle power.
+          </p>
         </div>
       )}
     </div>

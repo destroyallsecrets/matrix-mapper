@@ -21,35 +21,36 @@ const MatrixRain: React.FC<MatrixRainProps> = ({ opacity, color }) => {
     canvas.height = height;
 
     const alphabet = '10';
-
     const fontSize = 16;
-    const columns = width / fontSize;
+    const columns = Math.ceil(width / fontSize);
 
     const drops: number[] = [];
+    const speeds: number[] = [];
+    
     for (let x = 0; x < columns; x++) {
-      drops[x] = Math.random() * -100; // Start at random heights above screen
+      drops[x] = Math.random() * -100;
+      speeds[x] = 0.5 + Math.random() * 1.5; // Varied speeds for background depth
     }
 
     const draw = () => {
-      // Semi-transparent black to create trail effect
-      ctx.fillStyle = `rgba(0, 0, 0, 0.05)`;
+      ctx.fillStyle = `rgba(0, 0, 0, 0.1)`;
       ctx.fillRect(0, 0, width, height);
 
       ctx.fillStyle = color;
-      ctx.font = `${fontSize}px monospace`;
+      ctx.font = `${fontSize}px 'Fira Code', monospace`;
 
       for (let i = 0; i < drops.length; i++) {
         const text = alphabet.charAt(Math.floor(Math.random() * alphabet.length));
-        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+        ctx.fillText(text, i * fontSize, Math.floor(drops[i]) * fontSize);
 
         if (drops[i] * fontSize > height && Math.random() > 0.975) {
           drops[i] = 0;
         }
-        drops[i]++;
+        drops[i] += speeds[i];
       }
     };
 
-    const interval = setInterval(draw, 33);
+    const interval = setInterval(draw, 40); // Slightly slower frame rate for background optimization
 
     const handleResize = () => {
         width = window.innerWidth;
