@@ -2,14 +2,9 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
 
-const rootElement = document.getElementById('root');
-if (!rootElement) {
-  throw new Error("Could not find root element to mount to");
-}
+window.onerror = (msg, url, line, col, err) => {
+  document.body.innerHTML = `<div style="color:#f00;background:#000;padding:40px;font-family:monospace;font-size:20px;">ERROR: ${msg}<br>Line: ${line}</div>`;
+};
 
-const root = ReactDOM.createRoot(rootElement);
-root.render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-);
+const root = ReactDOM.createRoot(document.getElementById('root')!);
+root.render(<App />);
