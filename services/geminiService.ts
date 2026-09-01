@@ -1,50 +1,38 @@
-import { GoogleGenAI } from "@google/genai";
-
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-
 const OFFLINE_ANALYSIS_LOGS = [
   "Local heuristic complete. Structure: Ferro-concrete composite. Integrity: 94%.",
-  "Bio-digital signature not found. Sector clear.",
+  "Bio-digital signature identified. Sector status: Monitored.",
   "Visual anomaly detected. Grid alignment corrected by 0.04%.",
   "Light spectrum analysis: Artificial fluorescence detected.",
   "Object geometry matches standard database primitives.",
   "Motion vectors static. No hostile agents tracked.",
   "Atmospheric density nominal. Sensors calibrated.",
-  "Decryption failed. Surface patterns contain no hidden glyphs."
+  "Decryption complete. Spatial strata locked."
 ];
 
 export const analyzeSector = async (
-  imageBase64: string
+  imageBase64: string,
+  customPrompt?: string
 ): Promise<string> => {
-  const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, "");
-
-  const prompt = `
-    You are the tactical AI of a Matrix runner. 
-    Analyze the incoming video feed (spatial mapping).
-    Identify objects, people, or threats in the visual field.
-    Provide a tactical assessment log. 
-    Style: Cyberpunk, machine-code style, cryptic but informative.
-    Max 40 words.
-  `;
-
   try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          { inlineData: { mimeType: 'image/jpeg', data: cleanBase64 } },
-          { text: prompt }
-        ]
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
       },
-      config: {
-        maxOutputTokens: 150,
-        temperature: 0.7
-      }
+      body: JSON.stringify({
+        imageBase64,
+        customPrompt
+      })
     });
-    
-    return response.text || "Visual analysis inconclusive. Signal lost.";
+
+    if (!response.ok) {
+      throw new Error(`Server returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.result || "Visual analysis completed.";
   } catch (error) {
-    console.error("Gemini Vision Error:", error);
+    console.error("Tactical Vision Analysis Error:", error);
     const randomLog = OFFLINE_ANALYSIS_LOGS[Math.floor(Math.random() * OFFLINE_ANALYSIS_LOGS.length)];
     return `[LOCAL_OVERRIDE] ${randomLog}`;
   }

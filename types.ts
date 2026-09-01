@@ -10,3 +10,14 @@ export enum MapMode {
   SCANNING = 'SCANNING',
   ANALYZING = 'ANALYZING',
 }
+
+export interface TacticalTelemetry {
+  fps: number;
+  activeResolution: string;
+  gridCells: number;
+  activeSource: 'camera' | 'file';
+  sourceName: string;
+  recordingDuration: number;
+  crtScanlines: boolean;
+  soundEnabled: boolean;
+}

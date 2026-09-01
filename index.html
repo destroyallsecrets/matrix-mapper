@@ -3,9 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Matrix Spatial Mapper</title>
+    <title>Spatial Mapper</title>
+    <meta name="description" content="A cyberpunk terminal simulation that visualizes spatial data using 3D wireframes and Matrix-style code streams, powered by Gemini for structural analysis." />
+    <meta property="og:title" content="Spatial Mapper" />
+    <meta property="og:description" content="A cyberpunk terminal simulation that visualizes spatial data using 3D wireframes and Matrix-style code streams, powered by Gemini for structural analysis." />
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
       body {
         margin: 0;
@@ -17,17 +22,18 @@
       }
       /* Custom Scrollbar for Terminal */
       ::-webkit-scrollbar {
-        width: 8px;
+        width: 6px;
+        height: 6px;
       }
       ::-webkit-scrollbar-track {
-        background: #001100;
+        background: rgba(0, 20, 0, 0.6);
       }
       ::-webkit-scrollbar-thumb {
-        background: #004400;
-        border-radius: 4px;
+        background: rgba(0, 100, 0, 0.5);
+        border-radius: 3px;
       }
       ::-webkit-scrollbar-thumb:hover {
-        background: #006600;
+        background: rgba(0, 180, 0, 0.8);
       }
       
       /* CRT Effect Overlay */
@@ -41,8 +47,8 @@
           to bottom,
           rgba(255, 255, 255, 0),
           rgba(255, 255, 255, 0) 50%,
-          rgba(0, 0, 0, 0.2) 50%,
-          rgba(0, 0, 0, 0.2)
+          rgba(0, 0, 0, 0.22) 50%,
+          rgba(0, 0, 0, 0.22)
         );
         background-size: 100% 4px;
         pointer-events: none;
@@ -57,35 +63,23 @@
         bottom: 0;
         right: 0;
         background: rgba(18, 16, 16, 0.05);
-        opacity: 0.1;
+        opacity: 0.08;
         z-index: 49;
       }
       @keyframes flicker {
-        0% { opacity: 0.08; }
-        50% { opacity: 0.1; }
-        100% { opacity: 0.08; }
+        0% { opacity: 0.06; }
+        50% { opacity: 0.09; }
+        100% { opacity: 0.06; }
       }
       .glow-text {
         text-shadow: 0 0 5px #0f0, 0 0 10px #0f0;
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "@google/genai": "https://esm.sh/@google/genai@^1.41.0",
-    "lucide-react": "https://esm.sh/lucide-react@^0.567.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+  </head>
   <body>
     <div id="root"></div>
-    <div class="scanline"></div>
-    <div class="flicker"></div>
-  <script type="module" src="/index.tsx"></script>
-</body>
+    <div class="scanline" id="crt-scanlines"></div>
+    <div class="flicker" id="crt-flicker"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>
